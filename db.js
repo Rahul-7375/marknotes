@@ -1,59 +1,64 @@
-const mysql = require('mysql2/promise');
+const { Pool } = require('pg');
 require('dotenv').config();
 
-const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'marknotes',
-  port: process.env.DB_PORT || 3306,
-  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : null,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
 
 async function initDB() {
   try {
-    const connection = await pool.getConnection();
+    const client = await pool.connect();
     
-    // Create notes table
-    await connection.query(`
-      CREATE TABLE IF NOT EXISTS notes (
-        id         INT AUTO_INCREMENT PRIMARY KEY,
-        title      VARCHAR(255) NOT NULL DEFAULT 'Untitled Note',
-        content    TEXT NOT NULL,
-        tags       JSON NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    // 1. Create updated_at function
+    await client.query(`
+      CREATE OR REPLACE FUNCTION update_updated_at_column()
+      RETURNS TRIGGER AS $$
+      BEGIN
+          NEW.updated_at = NOW();
+          RETURN NEW;
+      END;
+      $$ language 'plpgsql';
     `);
 
-    // Create versions table
-    await connection.query(`
+    // 2. Create notes table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS notes (
+        id         SERIAL PRIMARY KEY,
+        title      VARCHAR(255) NOT NULL DEFAULT 'Untitled Note',
+        content    TEXT NOT NULL DEFAULT '',
+        tags       JSONB NOT NULL DEFAULT '[]',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 3. Create updated_at trigger (if not exists is tricky in PG, so we try/catch or just drop/create)
+    await client.query(`
+      DROP TRIGGER IF EXISTS update_notes_updated_at ON notes;
+      CREATE TRIGGER update_notes_updated_at
+      BEFORE UPDATE ON notes
+      FOR EACH ROW
+      EXECUTE FUNCTION update_updated_at_column();
+    `);
+
+    // 4. Create versions table
+    await client.query(`
       CREATE TABLE IF NOT EXISTS note_versions (
-        id       INT AUTO_INCREMENT PRIMARY KEY,
-        note_id  INT NOT NULL,
+        id       SERIAL PRIMARY KEY,
+        note_id  INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
         title    VARCHAR(255) NOT NULL,
         content  TEXT NOT NULL,
-        saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        saved_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
     `);
 
-    // Indices are handled by PRIMARY KEY but we can add more if needed
-    // CREATE INDEX is slightly different in MySQL for 'IF NOT EXISTS' 
-    // but we can just let it fail silently or use a more complex check.
-    
-    console.log('✅ MySQL Database Initialized');
-    connection.release();
+    console.log('✅ Supabase (PostgreSQL) Database Initialized');
+    client.release();
   } catch (error) {
-    if (error.code === 'ER_BAD_DB_ERROR') {
-      console.error(`❌ Database "${process.env.DB_NAME}" does not exist. Please create it first.`);
-    } else {
-      console.error('❌ Database Initialization Error:', error.message);
-    }
-    // We don't exit here to allow server to potentially retry or show useful error
+    console.error('❌ Supabase Initialization Error:', error.message);
   }
 }
 
