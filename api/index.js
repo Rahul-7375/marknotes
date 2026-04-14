@@ -71,8 +71,8 @@ api.get('/notes',
         meta: { total, page, limit, pages: Math.ceil(total / limit) } 
       });
     } catch (e) {
-      console.error(e);
-      err(res, 'Database error', 500);
+      console.error('List Notes Error:', e);
+      err(res, `Database error: ${e.message}`, 500);
     }
   }
 );
@@ -104,7 +104,8 @@ api.post('/notes',
       const [[note]] = await db.query('SELECT * FROM notes WHERE id = ?', [result.insertId]);
       ok(res, parseNote(note), 201);
     } catch (e) {
-      err(res, 'Database error', 500);
+      console.error('Create Note Error:', e);
+      err(res, `Database error during creation: ${e.message}`, 500);
     }
   }
 );
@@ -142,7 +143,8 @@ api.put('/notes/:id',
       const [[note]] = await db.query('SELECT * FROM notes WHERE id = ?', [id]);
       ok(res, parseNote(note));
     } catch (e) {
-      err(res, 'Database error', 500);
+      console.error('Update Note Error:', e);
+      err(res, `Database error during update: ${e.message}`, 500);
     }
   }
 );
